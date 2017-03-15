@@ -265,9 +265,21 @@ describe('shiro-trie node module', function() {
     var trie;
     before(function(done) {
       trie = shiroTrie.new();
-      trie.add('d:1,2,3:read,write', 'd:4:read', 'x', 'a:1:b:3,4', 'a:2:b:5,6');
-      trie.add('z:1,2:y:*', 'z:2,3,4:y:x', 'z:3,4,5:w:v');
+      trie.add('d:1,2,3:read,write');
+      trie.add('d:4:read');
+      trie.add('x');
+      trie.add('a:1:b:3,4');
+      trie.add('a:2:b:5,6');
+      trie.add('a:3:b:5,6:9');
+      trie.add('z:1,2:y:*');
+      trie.add('z:2,3,4:y:x');
+      trie.add('z:3,4,5:w:v');
+      trie.add('aaa:*');
       done();
+    });
+    it('simple id lookup with trailing wildcard should have no match', function(done) {
+        expect(trie.permissions('aaa:*')).to.eql([]);
+        done();
     });
     it('simple id lookup', function(done) {
       expect(trie.permissions('d:?')).to.eql(['1', '2', '3', '4']);
@@ -281,8 +293,8 @@ describe('shiro-trie node module', function() {
       expect(trie.permissions('d:?:write')).to.eql(['1', '2', '3']);
       done();
     });
-    it('simple id lookup with specific sub-right', function(done) {
-      expect(trie.permissions('a:?:b')).to.eql(['1', '2']);
+    it('simple id lookup with specific sub-right 2', function(done) {
+      expect(trie.permissions('a:?:b')).to.eql(['1', '2', '3']);
       done();
     });
     it('simple id lookup with specific sub-right and any at end', function (done) {
@@ -315,7 +327,7 @@ describe('shiro-trie node module', function() {
       done();
     });
     it('multiple any flags', function(done) {
-      expect(trie.permissions('$:$:?')).to.eql(['read', 'write', 'b', 'y', 'w']);
+      expect(trie.permissions('$:$:?')).to.eql(['read', 'write', '*', 'b', 'y', 'w']);
       done();
     });
     it('wildcard', function(done) {
@@ -335,29 +347,173 @@ describe('shiro-trie node module', function() {
       done();
     });
   });
-  
-  describe('expand function', function() {
-    it('test1', function() {
-      expect(shiroTrie._expand('x:a,b')).to.eql(['x:a', 'x:b']);
+
+  describe('get non-expanding wildcard Permissions', function() {
+      var trie;
+      before(function(done) {
+          trie = shiroTrie.new();
+          trie.add('item:$:read,write', 'item:7:read', 'other:*:*', 'test:1:update', 'test:2:read,delete');
+          trie.addImplies('delete', ['update', 'read']);
+          trie.addImplies('update', ['read']);
+          done();
+      });
+      it('simple position lookup', function(done) {
+          expect(trie.permissions('item:?')).to.eql(['7', '$']);
+          done();
+      });
+      it('simple position lookup with trailing parts', function(done) {
+          expect(trie.permissions('item:?:write')).to.eql(['$']);
+          expect(trie.permissions('item:?:read')).to.eql(['7', '$']);
+          done();
+      });
+      it('lookup with both non-expanding and expanding permission', function(done) {
+          expect(trie.permissions('other:?:*')).to.eql(['*']);
+          done();
+      });
+      it('lookup with both non-expanding and expanding permission and specific item', function(done) {
+          expect(trie.permissions('other:5:*')).to.eql([]);
+          done();
+      });
+      it('verify expansion with non-expanding perm leaf', function(done) {
+          expect(trie.permissions('test:2:?')).to.eql(['read', 'delete', 'update']);
+          done();
+      });
+      it('verify update implies read', function(done) {
+          expect(trie.permissions('test:1:?')).to.eql(['update', 'read']);
+          done();
+      });
+
+      // FIXME - wherever $ would be returned in params, replace with *
+
+      // CHECKS
+      it('checking perms with both non-expanding and expanding permission and specific item', function(done) {
+          expect(trie.check('other:5:*')).to.eql(true);
+          done();
+      });
+      it('check 1', function(done) {
+          expect(trie.check('other:10:read')).to.eql(true);
+          done();
+      });
+      it('check 2', function(done) {
+          expect(trie.check('other:10:*')).to.eql(true);
+          done();
+      });
+      it('check 3', function(done) {
+          expect(trie.check('other:$:*')).to.eql(true);
+          done();
+      });
+  });
+
+  describe('get non-expanding wildcard Permissions 2', function() {
+      var trie;
+      before(function (done) {
+        trie = shiroTrie.new();
+        trie.add('*:bleh:*:read');
+        trie.add('*:blah:*:update');
+        trie.add('*:project:9:basic:read');
+        trie.add('1:project:5:*:write');
+        trie.add('4:project:*:basic:*');
+        // $:project:?:$:*
+        trie.addImplies('delete', ['update', 'read']);
+        trie.addImplies('update', ['read']);
+        done();
+      });
+      // FIXME - perm $ matches everything except *, * matches everything even $ the other direction
+
+      // * in checks will only matches * / $ in perms
+      // $ in check will match $ / * / anything else in perms
+      it('verify that * matches * / $', function(done) {
+          expect(trie.check('*:bleh:*:read')).to.eql(true);
+          done();
+      });
+      it('verify that * matches * / $', function(done) {
+          expect(trie.check('$:bleh:$:read')).to.eql(true);
+          done();
+      });
+      it('verify that * matches * / $ with implies', function(done) {
+          expect(trie.check('*:blah:*:read')).to.eql(true);
+          done();
+      });
+      it('verify direct match with implies', function(done) {
+          expect(trie.check('$:blah:$:read')).to.eql(true);
+          done();
+      });
+
+      it('verify delete does not match with wildcards and implies', function(done) {
+          expect(trie.check('$:blah:$:delete')).to.eql(false);
+          done();
+      });
+
+      it('verify that we match ', function(done) {
+          expect(trie.permissions('$:project:?:$:$')).to.eql(['5', '*', '9']);
+          done();
+      });
+      it('verify * in check does not match anything in perm', function(done) {
+          expect(trie.permissions('$:project:?:$:*')).to.eql(['*']);
+          done();
+      });
+  });
+
+  describe('more tests', function() {
+    var trie;
+    before(function (done) {
+      trie = shiroTrie.new();
+      trie.add('*:organization:*:basic:read');
+      trie.add('*:project:*:basic:read');
+      // $:project:?:$:*
+      trie.addImplies('delete', ['update', 'read']);
+      trie.addImplies('update', ['read']);
+      done();
     });
-    it('test2', function() {
-      expect(shiroTrie._expand('x,y:a,b')).to.eql(['x:a', 'y:a', 'x:b', 'y:b']);
+
+    it('test1', function(done) {
+      expect(trie.permissions('$:organization:?:basic:read')).to.eql(['*']);
+      done();
     });
-    it('test3', function() {
-      expect(shiroTrie._expand('x:a,b,c')).to.eql(['x:a', 'x:b', 'x:c']);
+
+    it('test2', function(done) {
+      expect(trie.permissions('$:organization:?:*:read')).to.eql([]);
+      done();
     });
-    it('test4', function() {
-      expect(shiroTrie._expand('x:a,b,c:d')).to.eql(['x:a:d', 'x:b:d', 'x:c:d']);
+
+    it('test3', function(done) {
+      expect(trie.permissions('$:organization:*:*:create')).to.eql([]);
+      done();
     });
-    it('test5', function() {
-      expect(shiroTrie._expand('x,y:a,b,c:1,2')).to.eql(['x:a:1', 'y:a:1', 'x:b:1', 'y:b:1', 'x:c:1', 'y:c:1', 'x:a:2', 'y:a:2', 'x:b:2', 'y:b:2', 'x:c:2', 'y:c:2']);
+
+    it('test4', function(done) {
+      expect(trie.permissions('$:organization:?:*:update')).to.eql([]);
+      done();
     });
-    it('test6', function() {
-      expect(shiroTrie._expand('x,y:a')).to.eql(['x:a', 'y:a']);
-    });
-    it('test7', function() {
-      expect(shiroTrie._expand('x:y')).to.eql(['x:y']);
+
+    it('test5', function(done) {
+      expect(trie.permissions('$:organization:?:*:delete')).to.eql([]);
+      done();
     });
   });
+
+  describe('expand function', function() {
+  it('test1', function() {
+    expect(shiroTrie._expand('x:a,b')).to.eql(['x:a', 'x:b']);
+  });
+  it('test2', function() {
+    expect(shiroTrie._expand('x,y:a,b')).to.eql(['x:a', 'y:a', 'x:b', 'y:b']);
+  });
+  it('test3', function() {
+    expect(shiroTrie._expand('x:a,b,c')).to.eql(['x:a', 'x:b', 'x:c']);
+  });
+  it('test4', function() {
+    expect(shiroTrie._expand('x:a,b,c:d')).to.eql(['x:a:d', 'x:b:d', 'x:c:d']);
+  });
+  it('test5', function() {
+    expect(shiroTrie._expand('x,y:a,b,c:1,2')).to.eql(['x:a:1', 'y:a:1', 'x:b:1', 'y:b:1', 'x:c:1', 'y:c:1', 'x:a:2', 'y:a:2', 'x:b:2', 'y:b:2', 'x:c:2', 'y:c:2']);
+  });
+  it('test6', function() {
+    expect(shiroTrie._expand('x,y:a')).to.eql(['x:a', 'y:a']);
+  });
+  it('test7', function() {
+    expect(shiroTrie._expand('x:y')).to.eql(['x:y']);
+  });
+});
   
 });

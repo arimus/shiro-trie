@@ -48,86 +48,425 @@ function _add(trie, array) {
   return trie;
 }
 
-function _check(trie, array) {
-  var i, node;
+function log() {
+  // if (!!process && !!process.env && process.env.SHIROTRIE_DEBUG === 'true') {
+    var s = '';
+    for (var i=0; i < arguments[0]; i++) {
+      s += '    ';
+    }
+    for (var i=1; i < arguments.length; i++) {
+      s += arguments[i] + ' ';
+    }
+    console.log(s);
+    // console.log.apply(this, args);
+  // }
+}
+
+function _check(trie, implies, impliedBy, array, indent, implicitWildcard) {
+  log(indent, '_check');
+  if (indent == null) {
+    indent = 0;
+  }
+  if (implicitWildcard == null) {
+    implicitWildcard = true;
+  }
+  log(indent, '_check', array, 'against keys', Object.keys(trie));
+  var i, j, node;
   node = trie;
   // add implicit star at the end
-  if (array.length < 1 || array[array.length - 1] !== '*') {
+  if ((array.length < 1 || array[array.length - 1] !== '*') && implicitWildcard) {
     array.push('*');
   }
+
+  // break down each item in the perm a:b:c:d
   for (i = 0; i < array.length; i++) {
+    log(indent, '_check', 'checking', array[i], 'against keys', Object.keys(node));
+
+    // if we find a */$, then we have a match and have to dig deeper
     if (node.hasOwnProperty('*')) {
+      log(indent, '_check', '**** found * in trie');
       // if we find a star leaf in the trie, we are done (everything below is allowed)
       if (Object.keys(node['*']).length === 0) {
-        return true;
+          log(indent, '_check', '* is a leaf, returning true');
+          return true;
       }
       // otherwise we have to go deeper
-      node = node['*'];
-    } else {
-      // if the wanted permission is not found, we return false
-      if (!node.hasOwnProperty(array[i])) {
-        return false;
+      // log(indent, '_check', 'setting next node keys to', Object.keys(node['*']));
+      // node = node['*'];
+      // continue;
+      var a = array.slice(i + 1);
+      log(indent, '_check', 'drilling into keys', Object.keys(node['*']), 'checking', a);
+      var res = _check(node['*'], implies, impliedBy, a, indent + 1);
+      if (res) {
+          log(indent, '_check', 'results under *', res);
+          return true;
       }
-      // otherwise we go deeper
-      node = node[array[i]];
+      log(indent, '_check', '* match did not pan out, continuing');
+      // check for a $ match first - a:b:c:d in $:b:c:d
     }
+
+    if (node.hasOwnProperty('$')) {
+      // we found a non-expanding star leaf, allow this level and continue
+      log(indent, '_check', 'found $');
+      var a = array.slice(i + 1);
+      // log(indent, '_check', 'setting next node keys to', Object.keys(node['$']), 'checking', a);
+      var res = _check(node['$'], implies, impliedBy, a, indent + 1);
+      if (res) {
+        log(indent, '_check', 'results under $', res);
+        return true;
+      }
+      log(indent, '_check', '$ matched but no sub-match, continuing');
+    }
+
+    // log(indent, '_check', '* / $ not in trie at this level, continuing');
+
+    // // check implies list first, because if we have 'delete' that may imply 'read'
+    // log(indent, '_check', 'check implies?', array[i], impliedBy);
+    // if (!!impliedBy[array[i]]) {
+    //     log(indent, '_check', array[i], 'implied by', impliedBy[array[i]]);
+    //     // check to see if our current perm part is in the list of items that imply this
+    //     var foundImplies = false;
+    //     for (j = 0; j < impliedBy[array[i]].length; j++) {
+    //         log(indent, '_check', 'checking implies for', array[i], '=>', impliedBy[array[i]][j]);
+    //         implies = impliedBy[array[i]][j];
+    //         if (node.hasOwnProperty(implies)) {
+    //             node = node[implies];
+    //             foundImplies = true;
+    //             break;
+    //         }
+    //     }
+    //     if (foundImplies) {
+    //         log(indent, '_check', 'implies match');
+    //         continue;
+    //     }
+    //     log(indent, '_check', 'no implies match');
+    // } else {
+    //   log(indent, '_check', 'no implies match');
+    // }
+
+    // given perms: $:1:1:1, b:$:2:2
+    // checking for b:1:2:2
+    // for each perm in the trie
+    //   for each character in perm
+    //     ITER1
+    //       check b against $ - true
+    //       check 1 against 1 - true
+    //       check 2 against 1 - false
+    //     ITER2
+    //       check b against b - true
+    //       check 1 against $ - true
+    //       check 2 against 2 - true
+    //       check 2 against 2 - true
+
+    // if the wanted permission is not found, we return false
+    log(indent, '_check', 'checking for', array[i], 'in keys', Object.keys(node));
+
+    var keysWithImplies = _processImplies(Object.keys(node), implies, indent)
+    log(indent, '_check', 'expanding with implies', keysWithImplies);
+
+    // if (!node.hasOwnProperty(array[i]) && array[i] !== '$' && array[i] !== '*') {
+    if (keysWithImplies.indexOf(array[i]) === -1 && array[i] !== '$' && array[i] !== '*') {
+      log(indent, '_check', 'no match for', array[i]);
+      return false;
+    } else if (!node.hasOwnProperty(array[i]) && array[i] === '*') {
+      log(indent, '_check', 'no match for *', array[i]);
+      return false;
+    } else if (array[i] === '$') {
+      log(indent, '_check', 'checking for $');
+      // perform full checks just below this level
+      // $ can match on of many permissions in the trie, we need to loop through each path
+      var keys = Object.keys(node);
+      for (j = 0; j < keys.length; j++) {
+          var key = keys[j];
+          var subNode = node[key];
+          // now check the sub-node against what's left in the array
+          var res = _check(subNode, implies, impliedBy, array.splice(i + 1), indent + 1);
+          if (res) {
+              log(indent, '_check', '**** found match for $', array[i]);
+              return true;
+          }
+      }
+      log(indent, '_check', 'no match for $', array[i]);
+      return false;
+    }
+
+    // otherwise we go deeper
+    log(indent, '_check', '**** found match at this level for', array[i], 'in', Object.keys(node));
+
+    // check implied by and loop through until we find what we need
+    var a = impliedBy[array[i]];
+    if (!!a && a.length > 0) {
+      for (j = 0; j < a.length; j++) {
+        var key = a[j];
+        log(indent, '_check', 'have implies, checking for key', key, 'in', Object.keys(node));
+        var subNode = node[key];
+        if (!!subNode) {
+          // now check the sub-node against what's left in the array
+          var res = _check(subNode, implies, impliedBy, array.slice(i + 1), indent + 1);
+          if (res) {
+            log(indent, '_check', '**** found match for $', array[i]);
+            return true;
+          }
+        }
+      }
+    }
+
+    log(indent, '_check', 'setting next node for', array[i], 'to', Object.keys(node[array[i]]));
+    node = node[array[i]];
   }
+
   // word (array) was found in the trie. all good!
   return true;
 }
 
-function _permissions(trie, array) {
-  var current, results;
-  if (!trie || !array ||
-    typeof trie !== 'object' || !Array.isArray(array) ||
-    Object.keys(trie).length < 1 || array.length < 1) {
-    // for recursion safety, we make sure we have really valid values
-    return [];
+function _permissions(trie, array, implies, impliedBy, indent) {
+  if (indent == null) {
+    indent = 0;
+    log(indent, '_permissions checking', array, 'against trie', JSON.stringify(trie, null, 4));
+  } else {
+    log(indent, '_permissions checking', array, 'against keys', Object.keys(trie));
+  }
+  var current, results = [];
+  if (!trie || !array || typeof trie !== 'object' || !Array.isArray(array) || Object.keys(trie).length < 1 || array.length < 1) {
+      // for recursion safety, we make sure we have really valid values
+      log(indent, '_permissions current=', current, 'bailing...');
+      return [];
   }
   array = [].concat(array);
-  // if we have a star permission, we can just return that
-  if (trie.hasOwnProperty('*')) {
-    return ['*'];
-  }
+
+  // *:bleh:*:read
+  // *:blah:*:update
+  // *:project:9:basic:read
+  // 1:project:5:*:write
+  // 4:project:*
+  //
+  // check: $,project,?,$,*
+  // current = first item in list
+
   // take first element from array
   current = array.shift();
-  // the requested part
-  if (current === '?') {
-    results = Object.keys(trie);
-    // if something is coming after the ?,
-    if (array.length > 0) {
-      var anyObj = {};
-      results.forEach(function (node) {
-        anyObj[node] = _expandTrie(trie[node], array);
-      });
 
-      return results.filter(function (node) {
-        return anyObj[node].length > 0;
-      });
-    }
-    return results;
-  }
+  // checking current against current level keys *,1,4
+
+  // if current == $ then
+  //   we have $, so we match everything at this level...loop
+  //   results = []
+  //   forEach keys {
+  //     r = recurse project,?,$,* against node[key]
+  //     add r to matches
+  //   }
+  //   return matches
+  // end
+
+  // if node['*'] then
+  //   this will match anything that wasn't $ / ?, so we have to run down this tree and check for matches
+  //   r = recurse what in check against node['*']
+  //   add results to matches
+  //   fall through, because there may be other matches not *
+  // end
+
+  // if we have a star permission
+  // if (trie.hasOwnProperty('*')) {
+  //   log(indent, '_permissions current=', current, 'checking for *, perms=', array, 'trie=', JSON.stringify(trie, null, 4));
+  //   // if we get this far and there is a match ? anywhere left in the check, we must add the *
+  //   if (array.indexOf('?') !== -1 || current === '?') {
+  //     log(indent, '_permissions current=', current, 'found * in perms, adding to results');
+  //     results = results.concat('*');
+  //   }
+  //
+  //   // log(indent, '_permissions current=', current, 'have * at a match level');
+  //   // if (current === '?') {
+  //   //   log(indent, '_permissions current=', current, 'have * at a match level');
+  //   //   var keys = Object.keys(trie['*']);
+  //   //   if (!keys || keys.length === 0) {
+  //   //     log(indent, '_permissions current=', current, 'no more keys further down this tree, adding * to the list');
+  //   //     results = results.concat('*');
+  //   //   } else {
+  //   //     log(indent, '_permissions current=', current, 'recursing down into keys', keys);
+  //   //     results = results.concat(_permissions(trie['*'], [].concat(array), implies, impliedBy, indent + 1));
+  //   //     log(indent, '_permissions current=', current, 'results from *', results);
+  //   //   }
+  //   // } else {
+  //   //   log(indent, '_permissions current=', current, 'have * and not a match level, recursing');
+  //   //   results = results.concat(_permissions(trie['*'], [].concat(array), implies, impliedBy, indent + 1));
+  //   //   log(indent, '_permissions current=', current, 'results from *', results);
+  //   // }
+  //
+  //   //return ['*'];
+  //   // results = results.concat('*');
+  // }
+
   // if we have an 'any' flag, we have to go recursive for all alternatives
   if (current === '$') { // $ before ?
-    results = [];
-    Object.keys(trie).forEach(function concatPermissions(node) {
-      results = results.concat(_permissions(trie[node], [].concat(array)));
+    log(indent, '_permissions current=', current);
+    Object.keys(trie).forEach(function concatPermissions(key) {
+      log(indent, '_permissions current=', current, 'checking trie for key', key, 'trie', JSON.stringify(trie[key], null, 4));
+      // if we are at the end of our current trie branch
+      if (Object.keys(trie[key]).length === 0) {
+        log(indent, '_permissions current=', current, 'we hit the end of the trie, adding *');
+        results.push('*');
+      // else dig deeper
+      } else {
+        log(indent, '_permissions current=', current, 'dig further into the trie');
+        results = results.concat(_permissions(trie[key], [].concat(array), implies, impliedBy, indent + 1));
+        log(indent, '_permissions current=', current, 'concat results for', key, results);
+      }
     });
     // remove duplicates
     var u = uniq(results);
     // … and * from results
-    for (var i = u.length - 1; i >= 0; i--) {
-      if (u[i] === '*') {
-        u.splice(i, 1);
-      }
-    }
+    // for (var i = u.length - 1; i >= 0; i--) {
+    //   //if (u[i] === '*') {
+    //   //  u.splice(i, 1);
+    //   //}
+    // }
+    log(indent, '_permissions current=', current, 'results3: ', u);
     return u;
   }
-  if (trie.hasOwnProperty(current)) {
-    // we have to go deeper!
-    return _permissions(trie[current], array);
+
+  // if current == ? then
+  //   forEach keys {
+  //     check to see if the rest of the check matches and if so, add this key to the matches
+  //   }
+  //   return matches
+  // end
+
+  // the requested part
+  if (current === '?') {
+    results = Object.keys(trie);
+    log(indent, '_permissions current=', current, 'keys in trie', results);
+    // if something is coming after the ?,
+    if (array.length > 0) {
+      var anyObj = {};
+      var matchingNodes = [];
+      results.forEach(function (node) {
+        // check to see if the rest of this path in the trie matches
+        log(indent, '_permissions current=', current, 'checking ? match for key', node, 'check', array, 'trie', JSON.stringify(trie[node], null, 4));
+        var m = _check(trie[node], implies, impliedBy, [].concat(array), indent + 1, false);
+        if (m) {
+          log(indent, '_permissions current=', current, 'matched');
+          matchingNodes = matchingNodes.concat(node);
+        } else {
+          log(indent, '_permissions current=', current, 'not matched');
+        }
+
+        anyObj[node] = _expandTrie(trie[node], array);
+      });
+
+      var res = results.filter(function (node) {
+        log(indent, '_permissions current=', current, 'filtering ? nodes', node, matchingNodes, anyObj[node].length > 0, matchingNodes.indexOf(node) !== -1);
+        return anyObj[node].length > 0 && matchingNodes.indexOf(node) !== -1;
+      });
+
+      //
+      // res = res.filter(function (node) {
+      //   log(indent, '_permissions current=', current, 'filtering for ? match', node);
+      //
+      //   if (node === '$') {
+      //     var keys = Object.keys(trie[node]);
+      //     var matches = true;
+      //     keys.forEach(function (key) {
+      //       // we need to go through everything
+      //       log(indent, '_permissions current=', current, 'checking for ? match', array, JSON.stringify(trie[node], null, 4));
+      //       var m = _check(trie[node], implies, impliedBy, array, indent + 1);
+      //       if (!m) {
+      //         matches = false;
+      //       }
+      //     });
+      //     return matches;
+      //   } else {
+      //     log(indent, '_permissions current=', current, 'checking for ? match', array, JSON.stringify(trie[node], null, 4));
+      //     return _check(trie[node], implies, impliedBy, array, indent + 1);
+      //   }
+      // });
+      log(indent, '_permissions current=', current, 'returning ? expanded results after processing implies for', res);
+      return _processImplies(res, implies, indent);
+    }
+    log(indent, '_permissions current=', current, 'returning ? results after processing implies for', results);
+    return _processImplies(results, implies, indent);
   }
-  return [];
+
+  // the requested part
+  // if (current === '?') {
+  //   // log(indent, '_permissions current=', current, 'current: ?');
+  //   var keys = Object.keys(trie);
+  //   log(indent, '_permissions current=', current, 'current keys:', keys);
+  //   // if something is coming after the ?,
+  //   if (array.length > 0) {
+  //     var anyObj = {};
+  //     keys.forEach(function (key) {
+  //       // we may have a multi-part here, so split it
+  //       let skey.split(':');
+  //       log(indent, '_permissions current=', current, 'process key for ? matching', key);
+  //       anyObj[key] = _expandTrie(trie[key], array);
+  //       log(indent, '_permissions current=', current, 'keys expanded for ? matching', key, JSON.stringify(anyObj[key], null, 4));
+  //     });
+  //     log(indent, '_permissions current=', current, 'all keys expanded for ? matching', keys, JSON.stringify(anyObj, null, 4));
+  //
+  //     var res = keys.filter(function (key) {
+  //       log(indent, '_permissions current=', current, 'for ? matching filtering key', key, JSON.stringify(anyObj, null, 4));
+  //       if (anyObj[key].length > 0) {
+  //         anyObj[key].forEach(function (perm) {
+  //
+  //         });
+  //       }
+  //       return false;
+  //     });
+  //
+  //
+  //     log(indent, '_permissions current=', current, 'for ? matching have filtered keys', res);
+  //     //log(indent, '_permissions current=', current, 'DEBUG checking', array, JSON.stringify(trie[key], null, 4));
+  //     //var matches = _check(trie[key], implies, impliedBy, array, indent + 1);
+  //     //log(indent, '_permissions current=', current, 'for ? matching filtering key matches', matches);
+  //
+  //     return _processImplies(res, implies, indent);
+  //   } // else we match everything at this level FIXME - expanding?
+  //   results = keys;
+  //   log(indent, '_permissions current=', current, 'results2: ', results);
+  //   return _processImplies(results, implies, indent);
+  // }
+
+  // log(indent, '_permissions current=', current, 'current2:', current);
+
+  // if node[current] then
+  //   we have a match at this level, seek further for project,?,$,* against trie[current]
+  // end
+
+  // explicit matches
+  if (trie.hasOwnProperty(current)) {
+    log(indent, '_permissions current=', current, 'found match', current);
+    // we have to go deeper! and we may have other results from above, so concat
+    results = results.concat(_permissions(trie[current], array, implies, impliedBy));
+    log(indent, '_permissions current=', current, 'res3', results);
+    return results;
+  }
+
+  // return matches
+
+  log(indent, '_permissions current=', current, 'results5: ', []);
+  return results;
+}
+
+function _processImplies(res, implies, indent) {
+  if (indent == null) {
+    indent = 0;
+  }
+  log(indent, 'processing implies', res, JSON.stringify(implies, null, 4));
+  var resultsWithImplies = [];
+  // expand these results
+  for (var i=0; i < res.length; i++) {
+    // push the original item
+    resultsWithImplies.push(res[i]);
+
+    // push any implies
+    log(indent, 'checking for expansions:', res[i]);
+    var l = implies[res[i]];
+    if (!!l && l.length > 0) {
+        resultsWithImplies = resultsWithImplies.concat(l);
+    }
+  }
+  log(indent, 'results with implies: ', resultsWithImplies);
+  return uniq(resultsWithImplies);
 }
 
 function _expand(permission) {
@@ -147,6 +486,7 @@ function _expand(permission) {
       results = [].concat.apply([], uniq(alternatives));
     }
   }
+  console.log('_expand', permission, results);
   return results;
 }
 
@@ -179,6 +519,8 @@ function _expandTrie(trie, array) {
  */
 var ShiroTrie = function () {
   this.data = {};
+  this.impliedBy = {};
+  this.implies = {};
   return this;
 };
 
@@ -188,6 +530,8 @@ var ShiroTrie = function () {
  */
 ShiroTrie.prototype.reset = function () {
   this.data = {};
+  this.impliedBy = {};
+  this.implies = {};
   return this;
 };
 
@@ -208,6 +552,34 @@ ShiroTrie.prototype.add = function () {
 };
 
 /**
+ * Add one or more permission implications to the Trie. Example: 'delete' implies ['update', 'read']
+ * @param perm - The perm part that implies other perm parts
+ * @param implies - The array of perm parts implied
+ * @returns {ShiroTrie}
+ */
+ShiroTrie.prototype.addImplies = function (perm, implies) {
+  if (typeof perm !== 'string' || !Array.isArray(implies)) {
+    return false;
+  }
+
+  // save this for later expansion
+  this.implies[perm] = implies;
+
+  // index this in reverse order for lookups, delete implies update / read should result in:
+  // {
+  //   read: ['delete'],
+  //   update: ['delete']
+  // }
+  for (var i=0; i < implies.length; i++) {
+    if (!this.impliedBy[implies[i]]) {
+      this.impliedBy[implies[i]] = [];
+    }
+    this.impliedBy[implies[i]].push(perm);
+  }
+  return this;
+};
+
+/**
  * check if a specific permission is allowed in the current Trie.
  * @param string The string to check. Should not contain * – always check for the most explicit permission
  * @returns {*}
@@ -218,10 +590,11 @@ ShiroTrie.prototype.check = function (string) {
   }
   if (string.indexOf(',') !== -1) { // expand string to single comma-less permissions...
     return _expand(string).map(function (permission) {
-      return _check(this.data, permission.split(':'));
+      return _check(this.data, this.implies, this.impliedBy, permission.split(':'));
     }, this).every(Boolean); // ... and make sure they are all allowed
   }
-  return _check(this.data, string.split(':'));
+  log(0, 'check', string, 'in', this.data);
+  return _check(this.data, this.implies, this.impliedBy, string.split(':'));
 };
 
 /**
@@ -242,7 +615,9 @@ ShiroTrie.prototype.permissions = function (string) {
   if (typeof string !== 'string') {
     return [];
   }
-  return _permissions(this.data, string.split(':'));
+  var res = _permissions(this.data, string.split(':'), this.implies, this.impliedBy);
+  log(0, 'test', res);
+  return res;
 };
 
 module.exports = {
