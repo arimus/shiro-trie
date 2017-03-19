@@ -277,7 +277,7 @@ describe('shiro-trie node module', function() {
       trie.add('aaa:*');
       done();
     });
-    it('simple id lookup with trailing wildcard should have no match', function(done) {
+    it('simple id lookup with trailing wildcard, but no ? should have no match', function(done) {
         expect(trie.permissions('aaa:*')).to.eql([]);
         done();
     });
@@ -348,7 +348,7 @@ describe('shiro-trie node module', function() {
     });
   });
 
-  describe('get non-expanding wildcard Permissions', function() {
+  describe('get wildcard Permissions and perform checks with implies', function() {
       var trie;
       before(function(done) {
           trie = shiroTrie.new();
@@ -382,29 +382,26 @@ describe('shiro-trie node module', function() {
           expect(trie.permissions('test:1:?')).to.eql(['update', 'read']);
           done();
       });
-
-      // FIXME - wherever $ would be returned in params, replace with *
-
       // CHECKS
       it('checking perms with both non-expanding and expanding permission and specific item', function(done) {
           expect(trie.check('other:5:*')).to.eql(true);
           done();
       });
-      it('check 1', function(done) {
+      it('check that *:* ending param matches', function(done) {
           expect(trie.check('other:10:read')).to.eql(true);
           done();
       });
-      it('check 2', function(done) {
+      it('check that *:* ending param matches with wildcard', function(done) {
           expect(trie.check('other:10:*')).to.eql(true);
           done();
       });
-      it('check 3', function(done) {
+      it('check that *:* matches with any and wildcard', function(done) {
           expect(trie.check('other:$:*')).to.eql(true);
           done();
       });
   });
 
-  describe('get non-expanding wildcard Permissions 2', function() {
+  describe('get wildcard Permissions and perform checks with implies 2', function() {
       var trie;
       before(function (done) {
         trie = shiroTrie.new();
@@ -418,10 +415,7 @@ describe('shiro-trie node module', function() {
         trie.addImplies('update', ['read']);
         done();
       });
-      // FIXME - perm $ matches everything except *, * matches everything even $ the other direction
 
-      // * in checks will only matches * / $ in perms
-      // $ in check will match $ / * / anything else in perms
       it('verify that * matches * / $', function(done) {
           expect(trie.check('*:bleh:*:read')).to.eql(true);
           done();
@@ -454,13 +448,12 @@ describe('shiro-trie node module', function() {
       });
   });
 
-  describe('more tests', function() {
+  describe('get wildcard Permissions and perform checks with implies 3', function() {
     var trie;
     before(function (done) {
       trie = shiroTrie.new();
       trie.add('*:organization:*:basic:read');
       trie.add('*:project:*:basic:read');
-      // $:project:?:$:*
       trie.addImplies('delete', ['update', 'read']);
       trie.addImplies('update', ['read']);
       done();
